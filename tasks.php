@@ -18,6 +18,7 @@ $taskIds   = array_column($tasks, 'id');
 $photos    = fetch_photos_for_tasks($taskIds);
 $buildings = fetch_buildings();
 $rooms     = $filters['building_id'] ? fetch_rooms_by_building($filters['building_id']) : [];
+$exportRoomMeta = export_room_group_summary($filters);
 
 $query = $_GET;
 unset($query['page']);
@@ -191,7 +192,7 @@ include __DIR__ . '/includes/header.php';
             <?php $taskPhotos = $photos[$task['id']] ?? []; ?>
             <tr data-task-id="<?php echo (int)$task['id']; ?>">
               <td class="col-check" data-label="Select">
-                <input type="checkbox" class="task-checkbox" value="<?php echo $task['id']; ?>">
+                <input type="checkbox" class="task-checkbox" value="<?php echo $task['id']; ?>" data-room-id="<?php echo (int)$task['room_id']; ?>">
               </td>
 
               <td class="col-id" data-label="ID">#<?php echo (int)$task['id']; ?></td>
@@ -269,7 +270,9 @@ include __DIR__ . '/includes/header.php';
 </section>
 
 <!-- Export Modal -->
-<div id="exportModal" class="photo-modal hidden" aria-hidden="true">
+<div id="exportModal" class="photo-modal hidden" aria-hidden="true" data-export-meta='<?= json_encode([
+    'filtered' => array_merge($exportRoomMeta, ['taskTotal' => (int)$total])
+], JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT); ?>'>
   <div class="photo-modal-backdrop" data-close-export></div>
   <div class="photo-modal-box" role="dialog" aria-modal="true" aria-labelledby="exportModalTitle">
     <div class="photo-modal-header">
@@ -301,6 +304,7 @@ include __DIR__ . '/includes/header.php';
           <span>Only selected tasks (<span id="exportSelectedCount">0</span>)</span>
         </label>
         <p class="muted hidden" id="exportSelectedHint">Select tasks in the table first.</p>
+        <p class="muted hidden" id="exportRoomSummary"></p>
       </fieldset>
 
       <div class="form-actions">
@@ -325,6 +329,16 @@ document.addEventListener('DOMContentLoaded', () => {
   const filteredCountEl  = document.getElementById('exportFilteredCount');
   const selectedHint     = document.getElementById('exportSelectedHint');
   const closeControls    = exportModal ? Array.from(exportModal.querySelectorAll('[data-close-export]')) : [];
+  const roomSummaryEl    = document.getElementById('exportRoomSummary');
+
+  let exportMeta = {};
+  if (exportModal) {
+    try {
+      exportMeta = JSON.parse(exportModal.getAttribute('data-export-meta') || '{}');
+    } catch (err) {
+      exportMeta = {};
+    }
+  }
 
   const baseQuery = <?php echo json_encode($baseQuery, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT); ?>;
   const endpoints = {
@@ -334,6 +348,69 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const taskCheckboxes = () => Array.from(document.querySelectorAll('.task-checkbox'));
   const selectedIds = () => taskCheckboxes().filter(cb => cb.checked).map(cb => cb.value);
+
+  const currentScopeValue = () => {
+    if (!exportForm) return 'filtered';
+    const selectedScope = exportForm.querySelector('input[name="scope"]:checked');
+    return selectedScope ? selectedScope.value : 'filtered';
+  };
+
+  function getFilteredRoomMeta() {
+    const meta = (exportMeta && exportMeta.filtered) ? exportMeta.filtered : {};
+    return {
+      roomTotal: Number(meta.roomTotal || 0),
+      multiRooms: Number(meta.multiRooms || 0),
+      maxTasksPerRoom: Number(meta.maxTasksPerRoom || 0),
+      taskTotal: Number(meta.taskTotal || 0),
+    };
+  }
+
+  function computeSelectedRoomMeta() {
+    const counts = {};
+    taskCheckboxes().forEach((cb) => {
+      if (!cb.checked) return;
+      const roomId = cb.getAttribute('data-room-id') || '';
+      if (roomId === '') return;
+      counts[roomId] = (counts[roomId] || 0) + 1;
+    });
+
+    const roomIds = Object.keys(counts);
+    let multiRooms = 0;
+    let maxTasks = 0;
+    let taskTotal = 0;
+
+    roomIds.forEach((roomId) => {
+      const count = counts[roomId];
+      if (count > 1) multiRooms += 1;
+      if (count > maxTasks) maxTasks = count;
+      taskTotal += count;
+    });
+
+    return {
+      roomTotal: roomIds.length,
+      multiRooms,
+      maxTasksPerRoom: maxTasks,
+      taskTotal,
+    };
+  }
+
+  function updateRoomSummary(scopeValue) {
+    if (!roomSummaryEl) return;
+    const scope = scopeValue || currentScopeValue();
+    const meta = scope === 'selected' ? computeSelectedRoomMeta() : getFilteredRoomMeta();
+    const multi = meta.multiRooms || 0;
+
+    if (multi > 0) {
+      const max = meta.maxTasksPerRoom || 0;
+      const scopeLabel = scope === 'selected' ? 'selected tasks' : 'filtered tasks';
+      const maxText = max > 1 ? ` (up to ${max} in one room)` : '';
+      roomSummaryEl.textContent = `${multi} room${multi === 1 ? '' : 's'} within the ${scopeLabel} contain multiple tasks${maxText}. Those rooms will share a single QR code.`;
+      roomSummaryEl.classList.remove('hidden');
+    } else {
+      roomSummaryEl.classList.add('hidden');
+      roomSummaryEl.textContent = '';
+    }
+  }
 
   function updateSelectedState() {
     const allBoxes     = taskCheckboxes();
@@ -370,6 +447,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (selectedHint) {
       selectedHint.classList.toggle('hidden', selectedCount > 0);
     }
+
+    updateRoomSummary();
 
     return selected;
   }
@@ -432,6 +511,12 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   if (exportForm) {
+    exportForm.addEventListener('change', (event) => {
+      if (event.target && event.target.name === 'scope') {
+        updateRoomSummary(event.target.value);
+      }
+    });
+
     exportForm.addEventListener('submit', (event) => {
       event.preventDefault();
 
@@ -470,6 +555,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Initialize counts on load
   updateSelectedState();
+  updateRoomSummary();
 });
 </script>
 

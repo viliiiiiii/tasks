@@ -28,26 +28,78 @@ if ($selectedIds) {
 $taskIds = array_column($tasks, 'id');
 $pdo     = get_pdo();
 
-task_export_ensure_token_tables($pdo);
-$existingTokens = task_export_fetch_tokens($pdo, $taskIds);
-$baseUrl        = base_url_for_pdf();
-$publicPath     = '/public_task_photos.php';
-
-$qrMap = [];
-
+$taskRoomMap = [];
+$roomCounts  = [];
 foreach ($tasks as $task) {
     $taskId = (int)$task['id'];
-    if ($taskId <= 0) {
-        continue;
+    $roomId = (int)$task['room_id'];
+    if ($taskId > 0) {
+        $taskRoomMap[$taskId] = $roomId;
     }
+    if ($roomId > 0) {
+        $roomCounts[$roomId] = ($roomCounts[$roomId] ?? 0) + 1;
+    }
+}
 
-    $tokenRow = $existingTokens[$taskId] ?? task_export_insert_token($pdo, $taskId, $ttlDays);
-    $token    = is_string($tokenRow['token']) ? $tokenRow['token'] : (string)$tokenRow['token'];
+$multiRoomIds    = array_keys(array_filter($roomCounts, static fn($count) => $count > 1));
+$multiRoomLookup = $multiRoomIds ? array_fill_keys($multiRoomIds, true) : [];
 
-    $url = $baseUrl . $publicPath . '?t=' . rawurlencode($token);
-    $qr = qr_data_uri($url, $qrSize);
-    if ($qr) {
-        $qrMap[$taskId] = $qr;
+$baseUrl    = base_url_for_pdf();
+$publicPath = '/public_task_photos.php';
+
+$roomTokenData = [];
+if ($multiRoomIds) {
+    ensure_public_room_token_tables($pdo);
+    $existingRoomTokens = fetch_valid_room_tokens($pdo, $multiRoomIds);
+    foreach ($multiRoomIds as $roomId) {
+        $tokenRow = $existingRoomTokens[$roomId] ?? insert_room_token($pdo, $roomId, $ttlDays);
+        $token    = is_string($tokenRow['token']) ? $tokenRow['token'] : (string)$tokenRow['token'];
+        $url      = $baseUrl . '/public_room_photos.php?t=' . rawurlencode($token);
+        $roomTokenData[$roomId] = [
+            'token' => $token,
+            'url'   => $url,
+            'qr'    => qr_data_uri($url, $qrSize),
+        ];
+    }
+}
+
+$soloTaskIds = [];
+foreach ($taskIds as $taskId) {
+    $roomId = $taskRoomMap[$taskId] ?? 0;
+    if (!$roomId || empty($multiRoomLookup[$roomId])) {
+        $soloTaskIds[] = $taskId;
+    }
+}
+
+task_export_ensure_token_tables($pdo);
+$taskTokenData = [];
+if ($soloTaskIds) {
+    $existingTokens = task_export_fetch_tokens($pdo, $soloTaskIds);
+    foreach ($soloTaskIds as $taskId) {
+        $tokenRow = $existingTokens[$taskId] ?? task_export_insert_token($pdo, $taskId, $ttlDays);
+        $token    = is_string($tokenRow['token']) ? $tokenRow['token'] : (string)$tokenRow['token'];
+        $url      = $baseUrl . $publicPath . '?t=' . rawurlencode($token);
+        $taskTokenData[$taskId] = [
+            'token' => $token,
+            'url'   => $url,
+            'qr'    => qr_data_uri($url, $qrSize),
+        ];
+    }
+}
+
+$qrMap      = [];
+$qrScopeMap = [];
+
+foreach ($taskIds as $taskId) {
+    $roomId = $taskRoomMap[$taskId] ?? 0;
+    if ($roomId && isset($roomTokenData[$roomId])) {
+        $qrMap[$taskId]      = $roomTokenData[$roomId]['qr'] ?? null;
+        $qrScopeMap[$taskId] = 'Room';
+    } elseif (isset($taskTokenData[$taskId])) {
+        $qrMap[$taskId]      = $taskTokenData[$taskId]['qr'] ?? null;
+        $qrScopeMap[$taskId] = 'Task';
+    } else {
+        $qrScopeMap[$taskId] = '';
     }
 }
 
@@ -59,7 +111,7 @@ $headers = [
     'ID', 'Building', 'Room', 'Title', 'Description',
     'Priority', 'Status', 'Assigned To',
     'Due Date', 'Created At', 'Updated At',
-    'QR Code'
+    'QR Scope', 'QR Code'
 ];
 $sheet->fromArray($headers, null, 'A1');
 
@@ -68,13 +120,15 @@ $headerStyle = [
     'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER],
     'fill' => ['fillType' => 'solid', 'startColor' => ['rgb' => '2563EB']],
 ];
-$sheet->getStyle('A1:L1')->applyFromArray($headerStyle);
+$sheet->getStyle('A1:M1')->applyFromArray($headerStyle);
 
 $row       = 2;
 $tempFiles = [];
 
 foreach ($tasks as $task) {
     $taskId = (int)$task['id'];
+
+    $scopeLabel = $qrScopeMap[$taskId] ?? '';
 
     $sheet->fromArray([
         $task['id'],
@@ -88,6 +142,7 @@ foreach ($tasks as $task) {
         $task['due_date'],
         $task['created_at'],
         $task['updated_at'],
+        $scopeLabel,
         '',
     ], null, 'A' . $row);
 
@@ -100,7 +155,7 @@ foreach ($tasks as $task) {
                 $drawing = new Drawing();
                 $drawing->setName('QR ' . $taskId);
                 $drawing->setPath($tmp);
-                $drawing->setCoordinates('L' . $row);
+                $drawing->setCoordinates('M' . $row);
                 $drawing->setHeight($qrSize * 0.9);
                 $drawing->setWorksheet($sheet);
                 $sheet->getRowDimension($row)->setRowHeight(max($sheet->getRowDimension($row)->getRowHeight(), $qrSize * 0.9));
@@ -114,7 +169,7 @@ foreach ($tasks as $task) {
     $row++;
 }
 
-$sheet->getStyle('A1:L' . ($row - 1))->applyFromArray([
+$sheet->getStyle('A1:M' . ($row - 1))->applyFromArray([
     'borders' => [
         'allBorders' => [
             'borderStyle' => Border::BORDER_THIN,
@@ -123,10 +178,10 @@ $sheet->getStyle('A1:L' . ($row - 1))->applyFromArray([
     ]
 ]);
 
-foreach (range('A', 'K') as $col) {
+foreach (range('A', 'L') as $col) {
     $sheet->getColumnDimension($col)->setAutoSize(true);
 }
-$sheet->getColumnDimension('L')->setWidth(18);
+$sheet->getColumnDimension('M')->setWidth(18);
 
 if ($row > 2) {
     for ($r = 2; $r < $row; $r++) {

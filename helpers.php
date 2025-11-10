@@ -573,6 +573,32 @@ if (!defined('HELPERS_BOOTSTRAPPED')) {
         return $stmt->fetchAll();
     }
 
+    function export_room_group_summary(array $filters): array {
+        $params = [];
+        $where  = build_task_filter_query($filters, $params);
+
+        $sql = "SELECT COUNT(*) AS room_total,
+                       SUM(CASE WHEN room_count > 1 THEN 1 ELSE 0 END) AS multi_rooms,
+                       MAX(room_count) AS max_tasks_per_room
+                FROM (
+                    SELECT t.room_id, COUNT(*) AS room_count
+                    FROM tasks t
+                    JOIN rooms r ON r.id = t.room_id
+                    $where
+                    GROUP BY t.room_id
+                ) grouped";
+
+        $stmt = get_pdo()->prepare($sql);
+        $stmt->execute($params);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+
+        return [
+            'roomTotal'        => (int)($row['room_total'] ?? 0),
+            'multiRooms'       => (int)($row['multi_rooms'] ?? 0),
+            'maxTasksPerRoom'  => (int)($row['max_tasks_per_room'] ?? 0),
+        ];
+    }
+
     function fetch_tasks_by_ids(array $ids): array {
         if (empty($ids)) return [];
         $ph = implode(',', array_fill(0,count($ids),'?'));
