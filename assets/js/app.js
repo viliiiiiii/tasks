@@ -221,25 +221,44 @@ function initRooms() {
   };
 
   sources.forEach((select) => {
-    const targetId = select.dataset.roomTarget;
+    const targetAttr = select.dataset.roomTarget || '';
+    const targetIds = targetAttr.split(/\s+/).filter(Boolean);
     const inputId = select.dataset.roomInput;
     const datalistId = select.dataset.roomDatalist;
-    const target = targetId ? document.getElementById(targetId) : null;
+    const targets = targetIds.length
+      ? targetIds.map((id) => document.getElementById(id)).filter(Boolean)
+      : [];
+    const target = targets[0] || null;
     const input = inputId ? document.getElementById(inputId) : null;
     const datalist = datalistId ? document.getElementById(datalistId) : null;
 
-    ensurePlaceholder(target);
+    targets.forEach((t) => ensurePlaceholder(t));
+    if (!targets.length && target) ensurePlaceholder(target);
 
     const refresh = async () => {
       const buildingId = select.value;
       if (!buildingId) {
-        populateSelect(target, []);
+        targets.forEach((t) => {
+          populateSelect(t, []);
+          t.disabled = true;
+        });
+        if (!targets.length && target) {
+          populateSelect(target, []);
+          target.disabled = true;
+        }
         if (datalist) datalist.innerHTML = '';
         if (input) input.setCustomValidity('');
         return;
       }
       const rooms = await fetchRoomsForBuilding(buildingId);
-      populateSelect(target, rooms);
+      targets.forEach((t) => {
+        populateSelect(t, rooms);
+        t.disabled = false;
+      });
+      if (!targets.length && target) {
+        populateSelect(target, rooms);
+        target.disabled = false;
+      }
       populateDatalist(datalist, rooms);
       validateInput(input, rooms, buildingId);
     };
@@ -263,6 +282,11 @@ function initRooms() {
 
     if (select.value) {
       refresh();
+    } else {
+      targets.forEach((t) => {
+        if (t) t.disabled = true;
+      });
+      if (!targets.length && target) target.disabled = true;
     }
   });
 }

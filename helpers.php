@@ -310,6 +310,18 @@ if (!defined('HELPERS_BOOTSTRAPPED')) {
         $params[':room_id'] = (int)$filters['room_id'];
     }
 
+    if (!empty($filters['building_id'])) {
+        if (!empty($filters['room_from'])) {
+            $conditions[] = 'r.room_number >= (SELECT room_number FROM rooms WHERE id = :room_from_id)';
+            $params[':room_from_id'] = (int)$filters['room_from'];
+        }
+
+        if (!empty($filters['room_to'])) {
+            $conditions[] = 'r.room_number <= (SELECT room_number FROM rooms WHERE id = :room_to_id)';
+            $params[':room_to_id'] = (int)$filters['room_to'];
+        }
+    }
+
     if (!empty($filters['priority']) && is_array($filters['priority'])) {
         $ph = [];
         foreach ($filters['priority'] as $i => $p) {
@@ -330,16 +342,6 @@ if (!defined('HELPERS_BOOTSTRAPPED')) {
     if (!empty($filters['assigned_to'])) {
         $conditions[] = 't.assigned_to LIKE :assigned_to';
         $params[':assigned_to'] = '%' . $filters['assigned_to'] . '%';
-    }
-
-    if (!empty($filters['created_from'])) {
-        $conditions[] = 'DATE(t.created_at) >= :created_from';
-        $params[':created_from'] = $filters['created_from'];
-    }
-
-    if (!empty($filters['created_to'])) {
-        $conditions[] = 'DATE(t.created_at) <= :created_to';
-        $params[':created_to'] = $filters['created_to'];
     }
 
     if (!empty($filters['due_from'])) {
@@ -471,16 +473,17 @@ if (!defined('HELPERS_BOOTSTRAPPED')) {
     }
 
     function get_filter_values(): array {
-    $rawSearch = $_GET['search'] ?? ($_GET['q'] ?? '');
+    $rawSearch  = $_GET['search'] ?? ($_GET['q'] ?? '');
+    $buildingId = ($_GET['building_id'] ?? '') !== '' ? (int)$_GET['building_id'] : null;
     return [
         'search'       => trim((string)$rawSearch),
-        'building_id'  => ($_GET['building_id'] ?? '') !== '' ? (int)$_GET['building_id'] : null,
+        'building_id'  => $buildingId,
         'room_id'      => ($_GET['room_id'] ?? '') !== '' ? (int)$_GET['room_id'] : null,
+        'room_from'    => ($buildingId && ($_GET['room_from'] ?? '') !== '') ? (int)$_GET['room_from'] : null,
+        'room_to'      => ($buildingId && ($_GET['room_to'] ?? '') !== '') ? (int)$_GET['room_to'] : null,
         'priority'     => isset($_GET['priority']) ? array_filter((array)$_GET['priority'], fn($p)=>$p!=='') : [],
         'status'       => $_GET['status'] ?? '',
         'assigned_to'  => trim((string)($_GET['assigned_to'] ?? '')),
-        'created_from' => $_GET['created_from'] ?? '',
-        'created_to'   => $_GET['created_to'] ?? '',
         'due_from'     => $_GET['due_from'] ?? '',
         'due_to'       => $_GET['due_to'] ?? '',
         'has_photos'   => $_GET['has_photos'] ?? '',
@@ -492,10 +495,14 @@ if (!defined('HELPERS_BOOTSTRAPPED')) {
         if ($f['search']) $parts[] = 'Search: "'.sanitize($f['search']).'"';
         if ($f['building_id']) { $b = fetch_building_name($f['building_id']); if ($b) $parts[]='Building: '.sanitize($b); }
         if ($f['room_id']) { $r = fetch_room_label($f['room_id']); if ($r) $parts[]='Room: '.sanitize($r); }
+        if ($f['room_from'] || $f['room_to']) {
+            $from = $f['room_from'] ? fetch_room_label($f['room_from']) : null;
+            $to   = $f['room_to'] ? fetch_room_label($f['room_to']) : null;
+            $parts[] = 'Rooms: ' . ($from ? sanitize($from) : 'any') . ' to ' . ($to ? sanitize($to) : 'any');
+        }
         if ($f['priority']) $parts[] = 'Priority: '.implode(', ', array_map('priority_label',$f['priority']));
         if ($f['status']) $parts[] = 'Status: '.status_label($f['status']);
         if ($f['assigned_to']) $parts[] = 'Assigned To: '.sanitize($f['assigned_to']);
-        if ($f['created_from'] || $f['created_to']) $parts[]='Created: '.($f['created_from']?:'any').' to '.($f['created_to']?:'any');
         if ($f['due_from'] || $f['due_to']) $parts[]='Due: '.($f['due_from']?:'any').' to '.($f['due_to']?:'any');
         if ($f['has_photos']!=='') $parts[] = $f['has_photos']==='1' ? 'Has Photos' : 'No Photos';
         return $parts ? implode(' • ', $parts) : 'No filters applied';

@@ -54,7 +54,7 @@ include __DIR__ . '/includes/header.php';
     </label>
 
     <label>Building
-      <select name="building_id" data-room-source data-room-target="filter-room">
+      <select name="building_id" data-room-source data-room-target="filter-room filter-room-from filter-room-to">
         <option value="">All</option>
         <?php foreach ($buildings as $building): ?>
           <option value="<?php echo $building['id']; ?>" <?php echo $filters['building_id'] == $building['id'] ? 'selected' : ''; ?>>
@@ -101,12 +101,26 @@ include __DIR__ . '/includes/header.php';
       <input type="text" name="assigned_to" value="<?php echo sanitize($filters['assigned_to']); ?>">
     </label>
 
-    <label>Created From
-      <input type="date" name="created_from" value="<?php echo sanitize($filters['created_from']); ?>">
+    <label>Room From
+      <select name="room_from" id="filter-room-from" data-room-placeholder="Any" <?php echo $filters['building_id'] ? '' : 'disabled'; ?>>
+        <option value="">Any</option>
+        <?php foreach ($rooms as $room): ?>
+          <option value="<?php echo $room['id']; ?>" <?php echo $filters['room_from'] == $room['id'] ? 'selected' : ''; ?>>
+            <?php echo sanitize($room['room_number'] . ($room['label'] ? ' - ' . $room['label'] : '')); ?>
+          </option>
+        <?php endforeach; ?>
+      </select>
     </label>
 
-    <label>Created To
-      <input type="date" name="created_to" value="<?php echo sanitize($filters['created_to']); ?>">
+    <label>Room To
+      <select name="room_to" id="filter-room-to" data-room-placeholder="Any" <?php echo $filters['building_id'] ? '' : 'disabled'; ?>>
+        <option value="">Any</option>
+        <?php foreach ($rooms as $room): ?>
+          <option value="<?php echo $room['id']; ?>" <?php echo $filters['room_to'] == $room['id'] ? 'selected' : ''; ?>>
+            <?php echo sanitize($room['room_number'] . ($room['label'] ? ' - ' . $room['label'] : '')); ?>
+          </option>
+        <?php endforeach; ?>
+      </select>
     </label>
 
     <label>Due From
