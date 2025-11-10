@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/helpers.php';
 require_login();
+require_once __DIR__ . '/includes/export_tokens.php';
 
 set_time_limit(180);
 
@@ -165,7 +166,7 @@ if ($selectedIds) {
 
 /* Photos map (won't be embedded unless ?photos=1) */
 $taskIds = array_column($tasks, 'id');
-$photos  = $taskIds ? fetch_photos_for_tasks($taskIds) : [];
+$photos  = ($showPhotos && $taskIds) ? fetch_photos_for_tasks($taskIds) : [];
 
 /* ============================
    2) Tokens + public URLs + QR data URIs
@@ -173,23 +174,79 @@ $photos  = $taskIds ? fetch_photos_for_tasks($taskIds) : [];
 $pdo = get_pdo();
 ensure_public_token_tables($pdo);
 
-$existing   = fetch_valid_tokens($pdo, $taskIds);
+$taskRoomMap = [];
+$roomCounts  = [];
+foreach ($tasks as $task) {
+    $tid    = (int)$task['id'];
+    $roomId = (int)($task['room_id'] ?? 0);
+    if ($tid > 0) {
+        $taskRoomMap[$tid] = $roomId;
+    }
+    if ($roomId > 0) {
+        $roomCounts[$roomId] = ($roomCounts[$roomId] ?? 0) + 1;
+    }
+}
+
+$multiRoomIds       = array_keys(array_filter($roomCounts, static fn($count) => $count > 1));
+$multiRoomLookup    = $multiRoomIds ? array_fill_keys($multiRoomIds, true) : [];
+$roomsWithMultiple  = count($multiRoomIds);
+$maxTasksPerRoom    = $multiRoomIds ? max(array_map(static fn($roomId) => $roomCounts[$roomId], $multiRoomIds)) : 0;
+
 $base       = base_url_for_pdf();
 $publicPath = '/public_task_photos.php'; // The public viewer endpoint (no login)
 
+$roomQrMap = [];
+if ($multiRoomIds) {
+    ensure_public_room_token_tables($pdo);
+    $existingRoomTokens = fetch_valid_room_tokens($pdo, $multiRoomIds);
+    foreach ($multiRoomIds as $roomId) {
+        $tokenRow = $existingRoomTokens[$roomId] ?? insert_room_token($pdo, $roomId, $ttlDays);
+        $token    = is_string($tokenRow['token']) ? $tokenRow['token'] : (string)$tokenRow['token'];
+        $url      = $base . '/public_room_photos.php?t=' . rawurlencode($token);
+        $roomQrMap[$roomId] = [
+            'url' => $url,
+            'qr'  => qr_data_uri($url, $qrSize),
+        ];
+    }
+}
+
+$soloTaskIds = [];
+foreach ($taskIds as $taskId) {
+    $roomId = $taskRoomMap[$taskId] ?? 0;
+    if (!$roomId || empty($multiRoomLookup[$roomId])) {
+        $soloTaskIds[] = $taskId;
+    }
+}
+
+$existing   = $soloTaskIds ? fetch_valid_tokens($pdo, $soloTaskIds) : [];
 $publicLinks = [];   // task_id -> url
 $qrMap       = [];   // task_id -> data URI
+$qrScopeMap  = [];   // task_id -> label
 
 foreach ($tasks as $t) {
-    $tid   = (int)$t['id'];
-    $tokRow= $existing[$tid] ?? insert_token($pdo, $tid, $ttlDays);
-    $token = is_string($tokRow['token']) ? $tokRow['token'] : (string)$tokRow['token'];
+    $tid    = (int)$t['id'];
+    $roomId = $taskRoomMap[$tid] ?? 0;
+
+    if ($roomId && isset($roomQrMap[$roomId])) {
+        $publicLinks[$tid] = $roomQrMap[$roomId]['url'];
+        if (!empty($roomQrMap[$roomId]['qr'])) {
+            $qrMap[$tid] = $roomQrMap[$roomId]['qr'];
+        }
+        $qrScopeMap[$tid] = 'Room';
+        continue;
+    }
+
+    $tokRow = $existing[$tid] ?? insert_token($pdo, $tid, $ttlDays);
+    $token  = is_string($tokRow['token']) ? $tokRow['token'] : (string)$tokRow['token'];
 
     $url = $base . $publicPath . '?t=' . rawurlencode($token);
     $publicLinks[$tid] = $url;
 
     $qr = qr_data_uri($url, $qrSize);
-    if ($qr) $qrMap[$tid] = $qr;
+    if ($qr) {
+        $qrMap[$tid] = $qr;
+    }
+    $qrScopeMap[$tid] = 'Task';
 }
 
 /* ============================
@@ -210,6 +267,7 @@ ob_start();
   .muted { color:#6b7280; }
   .meta { font-size:10px; color:#6b7280; margin-bottom:8px; }
   .summary { border:1px solid #e6e9ef; background:#f6f8fb; border-radius:6px; padding:8px; font-size:10px; margin-bottom:10px; }
+  .room-note { border:1px solid #bbf7d0; background:#ecfdf5; border-radius:6px; padding:8px; font-size:10px; margin-bottom:10px; color:#166534; }
 
   /* Task card */
   .task {
@@ -251,6 +309,7 @@ ob_start();
   .qr-box {
     border:1px dashed #d1d5db; border-radius:8px; padding:6px 8px; width: <?php echo (int)($qrSize + 16); ?>px;
   }
+  .qr-scope { font-size:9px; font-weight:600; text-transform:uppercase; letter-spacing:0.04em; color:#475569; margin-bottom:4px; }
   .qr-box img {
     display:block; width: <?php echo (int)$qrSize; ?>px; height: <?php echo (int)$qrSize; ?>px;
     margin: 0 auto 6px;
@@ -295,6 +354,15 @@ ob_start();
   Layout: QR cards<?php echo $showPhotos ? ' + photos' : ''; ?>
 </div>
 <div class="summary"><strong>Filters:</strong> <?php echo htmlspecialchars($summary, ENT_QUOTES, 'UTF-8'); ?></div>
+<?php if ($roomsWithMultiple > 0): ?>
+  <div class="room-note">
+    <?php
+      $roomsWord = ($roomsWithMultiple === 1) ? 'room has' : 'rooms have';
+      $maxDetail = ($maxTasksPerRoom > 1) ? ' (up to ' . (int)$maxTasksPerRoom . ' tasks in one room)' : '';
+    ?>
+    <?php echo (int)$roomsWithMultiple; ?> <?php echo htmlspecialchars($roomsWord, ENT_QUOTES, 'UTF-8'); ?> multiple tasks<?php echo htmlspecialchars($maxDetail, ENT_QUOTES, 'UTF-8'); ?>. Each of those rooms shares a single QR code that opens its photo gallery.
+  </div>
+<?php endif; ?>
 
 <?php if (empty($tasks)): ?>
   <p class="muted">No tasks found for the selected filters.</p>
@@ -313,6 +381,7 @@ ob_start();
       $due          = !empty($t['due_date'])    ? (string)$t['due_date'] : '—';
       $publicUrl    = $publicLinks[$tid] ?? '';
       $qrDataUri    = $qrMap[$tid] ?? null;
+      $qrScope      = $qrScopeMap[$tid] ?? '';
     ?>
     <div class="task">
       <div class="task-head">
@@ -344,6 +413,9 @@ ob_start();
 
         <div class="col-qr">
           <div class="qr-box">
+            <?php if ($qrScope): ?>
+              <div class="qr-scope"><?php echo htmlspecialchars($qrScope === 'Room' ? 'Room QR' : 'Task QR', ENT_QUOTES, 'UTF-8'); ?></div>
+            <?php endif; ?>
             <?php if ($qrDataUri): ?>
               <img src="<?php echo $qrDataUri; ?>" alt="QR to public photos">
             <?php else: ?>
