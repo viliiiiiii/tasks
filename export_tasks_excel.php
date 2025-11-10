@@ -33,8 +33,7 @@ $existingTokens = task_export_fetch_tokens($pdo, $taskIds);
 $baseUrl        = base_url_for_pdf();
 $publicPath     = '/public_task_photos.php';
 
-$publicLinks = [];
-$qrMap       = [];
+$qrMap = [];
 
 foreach ($tasks as $task) {
     $taskId = (int)$task['id'];
@@ -46,8 +45,6 @@ foreach ($tasks as $task) {
     $token    = is_string($tokenRow['token']) ? $tokenRow['token'] : (string)$tokenRow['token'];
 
     $url = $baseUrl . $publicPath . '?t=' . rawurlencode($token);
-    $publicLinks[$taskId] = $url;
-
     $qr = qr_data_uri($url, $qrSize);
     if ($qr) {
         $qrMap[$taskId] = $qr;
@@ -62,7 +59,7 @@ $headers = [
     'ID', 'Building', 'Room', 'Title', 'Description',
     'Priority', 'Status', 'Assigned To',
     'Due Date', 'Created At', 'Updated At',
-    'Public Photos Link', 'QR Code'
+    'QR Code'
 ];
 $sheet->fromArray($headers, null, 'A1');
 
@@ -71,7 +68,7 @@ $headerStyle = [
     'alignment' => ['horizontal' => Alignment::HORIZONTAL_CENTER],
     'fill' => ['fillType' => 'solid', 'startColor' => ['rgb' => '2563EB']],
 ];
-$sheet->getStyle('A1:M1')->applyFromArray($headerStyle);
+$sheet->getStyle('A1:L1')->applyFromArray($headerStyle);
 
 $row       = 2;
 $tempFiles = [];
@@ -91,14 +88,8 @@ foreach ($tasks as $task) {
         $task['due_date'],
         $task['created_at'],
         $task['updated_at'],
-        $publicLinks[$taskId] ?? '',
         '',
     ], null, 'A' . $row);
-
-    if (!empty($publicLinks[$taskId])) {
-        $sheet->getCell('L' . $row)->getHyperlink()->setUrl($publicLinks[$taskId]);
-        $sheet->getStyle('L' . $row)->getAlignment()->setWrapText(true);
-    }
 
     if (!empty($qrMap[$taskId])) {
         $parts = explode(',', $qrMap[$taskId], 2);
@@ -109,7 +100,7 @@ foreach ($tasks as $task) {
                 $drawing = new Drawing();
                 $drawing->setName('QR ' . $taskId);
                 $drawing->setPath($tmp);
-                $drawing->setCoordinates('M' . $row);
+                $drawing->setCoordinates('L' . $row);
                 $drawing->setHeight($qrSize * 0.9);
                 $drawing->setWorksheet($sheet);
                 $sheet->getRowDimension($row)->setRowHeight(max($sheet->getRowDimension($row)->getRowHeight(), $qrSize * 0.9));
@@ -123,7 +114,7 @@ foreach ($tasks as $task) {
     $row++;
 }
 
-$sheet->getStyle('A1:M' . ($row - 1))->applyFromArray([
+$sheet->getStyle('A1:L' . ($row - 1))->applyFromArray([
     'borders' => [
         'allBorders' => [
             'borderStyle' => Border::BORDER_THIN,
@@ -135,8 +126,7 @@ $sheet->getStyle('A1:M' . ($row - 1))->applyFromArray([
 foreach (range('A', 'K') as $col) {
     $sheet->getColumnDimension($col)->setAutoSize(true);
 }
-$sheet->getColumnDimension('L')->setWidth(40);
-$sheet->getColumnDimension('M')->setWidth(18);
+$sheet->getColumnDimension('L')->setWidth(18);
 
 if ($row > 2) {
     for ($r = 2; $r < $row; $r++) {
