@@ -128,6 +128,7 @@ include __DIR__ . '/includes/header.php';
             <summary class="card-header building-summary">
                 <h3><?php echo sanitize($building['name']); ?></h3>
                 <div class="actions">
+                    <a class="btn small" href="building_export_selector.php?building_id=<?php echo $building['id']; ?>" target="_blank">Export Building</a>
                     <form method="post" onsubmit="return confirm('Delete building and its rooms?');">
                         <input type="hidden" name="<?php echo CSRF_TOKEN_NAME; ?>" value="<?php echo csrf_token(); ?>">
                         <button class="btn danger" type="submit" name="delete_building" value="<?php echo $building['id']; ?>">Delete Building</button>
