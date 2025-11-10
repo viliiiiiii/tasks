@@ -43,9 +43,7 @@ include __DIR__ . '/includes/header.php';
       <?php if (can('edit')): ?>
         <a class="btn primary" href="task_new.php">New Task</a>
       <?php endif; ?>
-      <a class="btn" href="export_table_pdf_wkhtml.php?<?php echo $baseQuery; ?>" target="_blank">Export PDF</a>
-      <a class="btn" href="export_table_pdf.php?<?php echo $baseQuery; ?>" target="_blank">Export PDF W/O pictures</a>
-      <a class="btn" href="export_csv.php?<?php echo $baseQuery; ?>" target="_blank">Export CSV</a>
+      <button class="btn" type="button" id="openExportModal">Export</button>
     </div>
   </div>
 
@@ -243,10 +241,6 @@ include __DIR__ . '/includes/header.php';
       </tbody>
     </table>
 
-    <div class="bulk-actions">
-      <button type="button" class="btn" onclick="submitSelected('export_table_pdf_wkhtml.php')">Export Selected to PDF</button>
-      <button type="button" class="btn" onclick="submitSelected('export_csv.php')">Export Selected to CSV</button>
-    </div>
   </form>
 
   <?php if ($pages > 1): ?>
@@ -260,28 +254,208 @@ include __DIR__ . '/includes/header.php';
   <?php endif; ?>
 </section>
 
-<script>
-function submitSelected(action) {
-  const selected = Array.from(document.querySelectorAll('.task-checkbox:checked')).map(cb => cb.value);
-  if (selected.length === 0) {
-    alert('Select at least one task.');
-    return;
-  }
-  const form = document.getElementById('taskListForm');
-  document.getElementById('selectedTasks').value = selected.join(',');
-  form.action = action;
-  form.submit();
-}
+<!-- Export Modal -->
+<div id="exportModal" class="photo-modal hidden" aria-hidden="true">
+  <div class="photo-modal-backdrop" data-close-export></div>
+  <div class="photo-modal-box" role="dialog" aria-modal="true" aria-labelledby="exportModalTitle">
+    <div class="photo-modal-header">
+      <h3 id="exportModalTitle">Export tasks</h3>
+      <button class="close-btn" type="button" title="Close" data-close-export>&times;</button>
+    </div>
 
-// Toggle-all support (kept separate from export logic)
+    <form id="exportForm" class="photo-modal-body">
+      <fieldset>
+        <legend>Format</legend>
+        <label class="radio-option">
+          <input type="radio" name="format" value="pdf" checked>
+          <span>PDF (with photos &amp; QR codes)</span>
+        </label>
+        <label class="radio-option">
+          <input type="radio" name="format" value="excel">
+          <span>Excel (XLSX with QR codes)</span>
+        </label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Task range</legend>
+        <label class="radio-option">
+          <input type="radio" name="scope" value="filtered" id="exportScopeFiltered" checked>
+          <span>All tasks matching current filters (<span id="exportFilteredCount"><?php echo number_format($total); ?></span>)</span>
+        </label>
+        <label class="radio-option">
+          <input type="radio" name="scope" value="selected" id="exportScopeSelected" disabled>
+          <span>Only selected tasks (<span id="exportSelectedCount">0</span>)</span>
+        </label>
+        <p class="muted hidden" id="exportSelectedHint">Select tasks in the table first.</p>
+      </fieldset>
+
+      <div class="form-actions">
+        <button class="btn primary" type="submit">Download</button>
+        <button class="btn secondary" type="button" data-close-export>Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
 document.addEventListener('DOMContentLoaded', () => {
-  const toggle = document.getElementById('toggle-all');
-  if (toggle) {
-    toggle.addEventListener('change', () => {
-      const boxes = document.querySelectorAll('.task-checkbox');
-      boxes.forEach(cb => { cb.checked = toggle.checked; });
+  const form             = document.getElementById('taskListForm');
+  const toggleAll        = document.getElementById('toggle-all');
+  const exportBtn        = document.getElementById('openExportModal');
+  const exportModal      = document.getElementById('exportModal');
+  const exportForm       = document.getElementById('exportForm');
+  const scopeFiltered    = document.getElementById('exportScopeFiltered');
+  const scopeSelected    = document.getElementById('exportScopeSelected');
+  const selectedField    = document.getElementById('selectedTasks');
+  const selectedCountEl  = document.getElementById('exportSelectedCount');
+  const filteredCountEl  = document.getElementById('exportFilteredCount');
+  const selectedHint     = document.getElementById('exportSelectedHint');
+  const closeControls    = exportModal ? Array.from(exportModal.querySelectorAll('[data-close-export]')) : [];
+
+  const baseQuery = <?php echo json_encode($baseQuery, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT); ?>;
+  const endpoints = {
+    pdf: 'export_table_pdf_wkhtml.php',
+    excel: 'export_tasks_excel.php'
+  };
+
+  const taskCheckboxes = () => Array.from(document.querySelectorAll('.task-checkbox'));
+  const selectedIds = () => taskCheckboxes().filter(cb => cb.checked).map(cb => cb.value);
+
+  function updateSelectedState() {
+    const allBoxes     = taskCheckboxes();
+    const selected     = selectedIds();
+    const selectedCount = selected.length;
+
+    if (selectedCountEl) {
+      selectedCountEl.textContent = selectedCount.toString();
+    }
+
+    if (filteredCountEl) {
+      filteredCountEl.textContent = '<?php echo number_format($total); ?>';
+    }
+
+    if (toggleAll) {
+      if (allBoxes.length === 0) {
+        toggleAll.indeterminate = false;
+        toggleAll.checked = false;
+      } else {
+        const allChecked = selectedCount === allBoxes.length;
+        toggleAll.checked = allChecked;
+        toggleAll.indeterminate = !allChecked && selectedCount > 0;
+      }
+    }
+
+    if (scopeSelected) {
+      const hasSelection = selectedCount > 0;
+      scopeSelected.disabled = !hasSelection;
+      if (!hasSelection && scopeSelected.checked && scopeFiltered) {
+        scopeFiltered.checked = true;
+      }
+    }
+
+    if (selectedHint) {
+      selectedHint.classList.toggle('hidden', selectedCount > 0);
+    }
+
+    return selected;
+  }
+
+  function openExportModal() {
+    if (!exportModal) return;
+    updateSelectedState();
+    exportModal.classList.remove('hidden');
+    exportModal.setAttribute('aria-hidden', 'false');
+    document.body.style.overflow = 'hidden';
+  }
+
+  function closeExportModal() {
+    if (!exportModal) return;
+    exportModal.classList.add('hidden');
+    exportModal.setAttribute('aria-hidden', 'true');
+    document.body.style.overflow = '';
+  }
+
+  function buildAction(base, query) {
+    if (!query) return base;
+    return base.includes('?') ? base + '&' + query : base + '?' + query;
+  }
+
+  if (toggleAll) {
+    toggleAll.addEventListener('change', () => {
+      const boxes = taskCheckboxes();
+      boxes.forEach(cb => { cb.checked = toggleAll.checked; });
+      updateSelectedState();
     });
   }
+
+  document.addEventListener('change', (event) => {
+    const target = event.target;
+    if (target && target.classList && target.classList.contains('task-checkbox')) {
+      updateSelectedState();
+    }
+  });
+
+  if (exportBtn) {
+    exportBtn.addEventListener('click', openExportModal);
+  }
+
+  closeControls.forEach((btn) => {
+    btn.addEventListener('click', closeExportModal);
+  });
+
+  if (exportModal) {
+    exportModal.addEventListener('click', (event) => {
+      if (event.target.classList.contains('photo-modal-backdrop')) {
+        closeExportModal();
+      }
+    });
+  }
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && exportModal && !exportModal.classList.contains('hidden')) {
+      closeExportModal();
+    }
+  });
+
+  if (exportForm) {
+    exportForm.addEventListener('submit', (event) => {
+      event.preventDefault();
+
+      const formatInput = exportForm.querySelector('input[name="format"]:checked');
+      const scopeInput  = exportForm.querySelector('input[name="scope"]:checked');
+      const format      = formatInput ? formatInput.value : '';
+      const scope       = scopeInput ? scopeInput.value : 'filtered';
+
+      if (!format || !endpoints[format]) {
+        alert('Select an export format.');
+        return;
+      }
+
+      const ids = selectedIds();
+      if (scope === 'selected') {
+        if (ids.length === 0) {
+          alert('Select at least one task to export.');
+          return;
+        }
+        if (selectedField) {
+          selectedField.value = ids.join(',');
+        }
+      } else if (selectedField) {
+        selectedField.value = '';
+      }
+
+      const action = buildAction(endpoints[format], baseQuery);
+      if (form) {
+        form.action = action;
+        form.submit();
+      }
+
+      closeExportModal();
+    });
+  }
+
+  // Initialize counts on load
+  updateSelectedState();
 });
 </script>
 
