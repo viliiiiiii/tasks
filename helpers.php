@@ -372,7 +372,7 @@ if (!defined('HELPERS_BOOTSTRAPPED')) {
         $direction = strtoupper($direction)==='ASC' ? 'ASC' : 'DESC';
 
         $pdo = get_pdo();
-        $stmt = $pdo->prepare("SELECT COUNT(*) FROM tasks t $where");
+        $stmt = $pdo->prepare("SELECT COUNT(*) FROM tasks t JOIN rooms r ON r.id = t.room_id $where");
         $stmt->execute($params);
         $total = (int)$stmt->fetchColumn();
 
